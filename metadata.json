@@ -1,0 +1,6 @@
+{
+  "name": "Echo Chat",
+  "description": "A real-time communication platform featuring servers, channels, and instant messaging, inspired by Discord.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

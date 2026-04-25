@@ -1,0 +1,131 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "photoURL": { "type": "string" },
+        "status": { "type": "string", "enum": ["online", "idle", "dnd", "offline"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "email"]
+    },
+    "Server": {
+      "title": "Server",
+      "description": "A guild/server containing channels",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "iconURL": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "ownerId"]
+    },
+    "Channel": {
+      "title": "Channel",
+      "description": "A channel within a server",
+      "type": "object",
+      "properties": {
+        "serverId": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["text", "voice"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["serverId", "name", "type"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "A chat message",
+      "type": "object",
+      "properties": {
+        "channelId": { "type": "string" },
+        "serverId": { "type": "string" },
+        "userId": { "type": "string" },
+        "content": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "userDisplayName": { "type": "string" },
+        "userPhotoURL": { "type": "string" }
+      },
+      "required": ["channelId", "userId", "content", "timestamp"]
+    },
+    "ServerMember": {
+      "title": "Server Member",
+      "description": "Relationship between user and server",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "role": { "type": "string", "enum": ["owner", "admin", "member"] },
+        "joinedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "role"]
+    },
+    "VoiceState": {
+      "title": "Voice State",
+      "description": "User's current voice channel state",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "channelId": { "type": "string" },
+        "serverId": { "type": "string" },
+        "mute": { "type": "boolean" },
+        "deaf": { "type": "boolean" },
+        "isSpeaking": { "type": "boolean" },
+        "joinedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "channelId", "serverId"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "User notifications for mentions",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "type": { "type": "string", "enum": ["mention"] },
+        "fromUserId": { "type": "string" },
+        "fromUserName": { "type": "string" },
+        "serverId": { "type": "string" },
+        "channelId": { "type": "string" },
+        "messageId": { "type": "string" },
+        "content": { "type": "string" },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "type", "fromUserId", "content", "read", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Store user profiles"
+    },
+    "/servers/{serverId}": {
+      "schema": "Server",
+      "description": "Global server list"
+    },
+    "/servers/{serverId}/channels/{channelId}": {
+      "schema": "Channel",
+      "description": "Channels belonging to a server"
+    },
+    "/servers/{serverId}/members/{userId}": {
+      "schema": "ServerMember",
+      "description": "Members of a specific server"
+    },
+    "/channels/{channelId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Messages for a specific channel"
+    },
+    "/voiceStates/{stateId}": {
+      "schema": "VoiceState",
+      "description": "Active voice channel participants"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "User notifications"
+    }
+  }
+}

@@ -1,0 +1,112 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isServerMember(serverId) {
+      return isSignedIn() && exists(/databases/$(database)/documents/servers/$(serverId)/members/$(request.auth.uid));
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    // Validation helpers
+    function isValidUser(data) {
+      return data.uid == request.auth.uid &&
+             data.displayName is string && data.displayName.size() <= 100 &&
+             data.status in ['online', 'idle', 'dnd', 'offline'];
+    }
+
+    function isValidServer(data) {
+      return data.keys().hasAll(['name', 'ownerId', 'createdAt']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             (!('iconURL' in data) || (data.iconURL is string && data.iconURL.size() <= 2048));
+    }
+
+    function isValidMessage(data) {
+      return data.userId == request.auth.uid &&
+             data.content is string && data.content.size() > 0 && data.content.size() <= 2000;
+    }
+
+    function isValidNotification(data) {
+      return data.userId is string &&
+             data.type == 'mention' &&
+             data.fromUserId == request.auth.uid &&
+             data.content is string && data.content.size() <= 2048 &&
+             data.read == false;
+    }
+
+    // User profiles
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create, update: if isOwner(userId) && isValidUser(incoming());
+    }
+
+    // Servers
+    match /servers/{serverId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidServer(incoming()) && incoming().ownerId == request.auth.uid;
+      allow update: if isSignedIn() && 
+                    resource.data.ownerId == request.auth.uid && 
+                    isValidServer(incoming()) &&
+                    incoming().ownerId == resource.data.ownerId;
+      allow delete: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+
+      // Server Members
+      match /members/{memberId} {
+        allow read: if isSignedIn();
+        allow write: if isSignedIn() && (isOwner(memberId) || get(/databases/$(database)/documents/servers/$(serverId)).data.ownerId == request.auth.uid);
+      }
+
+      // Channels
+      match /channels/{channelId} {
+        // Allow reading channels if signed in (Discord allows discovery) or more strictly if a member.
+        // Loosening to isSignedIn() for now to handle potential race conditions during server creation.
+        allow read: if isSignedIn();
+        allow create, update: if isSignedIn() && get(/databases/$(database)/documents/servers/$(serverId)).data.ownerId == request.auth.uid;
+      }
+    }
+
+    // Messages - Top level for flatter queries
+    match /channels/{channelId}/messages/{messageId} {
+      // Use resource.data for reads - incoming() is for writes
+      allow read: if isSignedIn(); 
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && isValidMessage(incoming());
+      allow update, delete: if isOwner(resource.data.userId);
+    }
+
+    // Voice States
+    match /voiceStates/{stateId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid;
+      allow update: if isSignedIn() && resource.data.userId == request.auth.uid && incoming().userId == request.auth.uid;
+      allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || get(/databases/$(database)/documents/servers/$(resource.data.serverId)).data.ownerId == request.auth.uid);
+    }
+    
+    // Notifications
+    match /notifications/{notificationId} {
+      allow get: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidNotification(incoming());
+      allow update: if isSignedIn() && resource.data.userId == request.auth.uid && incoming().diff(resource.data).affectedKeys().hasOnly(['read']);
+    }
+  }
+}
