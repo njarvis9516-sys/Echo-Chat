@@ -64,7 +64,13 @@ export default function App() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   
+  const [serverSearchQuery, setServerSearchQuery] = useState('');
+  
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const filteredServers = servers.filter(s => 
+    s.name.toLowerCase().includes(serverSearchQuery.toLowerCase())
+  );
 
   // Activity Tracking
   useEffect(() => {
@@ -464,14 +470,30 @@ export default function App() {
   return (
     <div className="flex h-screen bg-[#313338] text-[#dbdee1] overflow-hidden font-sans">
       {/* 1. Server List */}
-      <div className="w-[72px] bg-[#1e1f22] flex flex-col items-center py-3 gap-2 flex-shrink-0">
-        <div className="w-12 h-12 bg-[#313338] rounded-[24px] hover:rounded-[16px] hover:bg-[#5865f2] hover:text-white transition-all flex items-center justify-center cursor-pointer mb-2 group relative">
+      <div className="w-[72px] bg-[#1e1f22] flex flex-col items-center py-3 gap-2 flex-shrink-0 overflow-y-auto no-scrollbar relative group/sidebar">
+        {/* Server Search Trigger */}
+        <div className="w-12 h-12 bg-[#313338] rounded-[24px] hover:rounded-[16px] hover:bg-[#5865f2] hover:text-white transition-all flex flex-col items-center justify-center cursor-pointer mb-2 group relative overflow-hidden">
+          <input
+            type="text"
+            value={serverSearchQuery}
+            onChange={(e) => setServerSearchQuery(e.target.value)}
+            placeholder="Search..."
+            className="absolute inset-0 bg-transparent opacity-0 focus:opacity-100 focus:bg-[#313338] w-full h-full text-xs px-2 outline-none transition-all z-20 text-white placeholder:text-gray-500"
+            title="Search servers"
+          />
+          <Search size={20} className="z-10 pointer-events-none group-focus-within:opacity-0 transition-opacity" />
+        </div>
+
+        <div 
+          onClick={() => setSelectedServerId('')}
+          className="w-12 h-12 bg-[#313338] rounded-[24px] hover:rounded-[16px] hover:bg-[#5865f2] hover:text-white transition-all flex items-center justify-center cursor-pointer mb-2 group relative"
+        >
           <div className="absolute -left-1 w-1 h-2 bg-white rounded-r-full hidden group-hover:block" />
           <ServerIcon size={24} />
         </div>
         <div className="w-8 h-[2px] bg-[#35363c] mb-2" />
         
-        {servers.map((server) => (
+        {filteredServers.map((server) => (
           <div 
             key={server.id}
             onClick={() => setSelectedServerId(server.id)}
