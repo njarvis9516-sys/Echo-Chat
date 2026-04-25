@@ -25,11 +25,13 @@
     "firebase": "^12.12.1",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
+    "process": "^0.11.10",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "simple-peer": "^9.11.1",
     "stream-browserify": "^3.0.0",
     "tailwind-merge": "^3.5.0",
+    "util": "^0.12.5",
     "vite": "^6.2.0"
   },
   "devDependencies": {
