@@ -15,6 +15,9 @@ export interface Server {
   ownerId: string;
   memberIds: string[];
   iconURL?: string;
+  description?: string;
+  isDiscoverable?: boolean;
+  bannerURL?: string;
   createdAt: string;
 }
 
@@ -52,6 +55,7 @@ export interface VoiceState {
   mute: boolean;
   deaf: boolean;
   isSpeaking: boolean;
+  video?: boolean;
   joinedAt: any;
 }
 

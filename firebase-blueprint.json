@@ -22,6 +22,14 @@
         "name": { "type": "string" },
         "ownerId": { "type": "string" },
         "iconURL": { "type": "string" },
+        "bannerURL": { "type": "string" },
+        "description": { "type": "string" },
+        "isDiscoverable": { "type": "boolean" },
+        "category": { "type": "string" },
+        "memberIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["name", "ownerId"]
@@ -75,9 +83,24 @@
         "mute": { "type": "boolean" },
         "deaf": { "type": "boolean" },
         "isSpeaking": { "type": "boolean" },
+        "video": { "type": "boolean" },
         "joinedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "channelId", "serverId"]
+    },
+    "VideoSignal": {
+      "title": "Video Signal",
+      "description": "WebRTC signaling document",
+      "type": "object",
+      "properties": {
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "channelId": { "type": "string" },
+        "type": { "type": "string", "enum": ["offer", "answer", "candidate"] },
+        "signal": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["from", "to", "channelId", "type", "signal"]
     },
     "Notification": {
       "title": "Notification",
@@ -126,6 +149,10 @@
     "/notifications/{notificationId}": {
       "schema": "Notification",
       "description": "User notifications"
+    },
+    "/videoSignals/{signalId}": {
+      "schema": "VideoSignal",
+      "description": "WebRTC signaling exchange"
     }
   }
 }

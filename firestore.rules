@@ -109,11 +109,18 @@ service cloud.firestore {
     }
 
     // Voice States
-    match /voiceStates/{stateId} {
+    match /voiceStates/{userId} {
       allow read: if isSignedIn();
-      allow create: if isSignedIn() && incoming().userId == request.auth.uid;
-      allow update: if isSignedIn() && resource.data.userId == request.auth.uid && incoming().userId == request.auth.uid;
-      allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || get(/databases/$(database)/documents/servers/$(resource.data.serverId)).data.ownerId == request.auth.uid);
+      allow create: if isOwner(userId) && incoming().userId == request.auth.uid;
+      allow update: if isOwner(userId);
+      allow delete: if isOwner(userId) || (isSignedIn() && get(/databases/$(database)/documents/servers/$(resource.data.serverId)).data.ownerId == request.auth.uid);
+    }
+    
+    // Video Signals (WebRTC)
+    match /videoSignals/{signalId} {
+      allow list, get: if isSignedIn() && resource.data.to == request.auth.uid;
+      allow create: if isSignedIn() && incoming().from == request.auth.uid;
+      allow delete: if isSignedIn() && resource.data.to == request.auth.uid;
     }
     
     // Notifications

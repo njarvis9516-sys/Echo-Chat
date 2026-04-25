@@ -69,13 +69,16 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
 
 export const chatService = {
   // Servers
-  async createServer(name: string, ownerId: string, iconURL?: string) {
+  async createServer(name: string, ownerId: string, iconURL?: string, description?: string) {
     const path = 'servers';
     try {
       const serverData: any = {
         name,
         ownerId,
         memberIds: [ownerId],
+        isDiscoverable: true, // Default to true for this demo
+        description: description || 'No description provided.',
+        bannerURL: `https://images.unsplash.com/photo-1511447333035-4d398108cd4e?q=80&w=800&auto=format&fit=crop`, // Placeholder
         createdAt: new Date().toISOString()
       };
       if (iconURL) serverData.iconURL = iconURL;
@@ -119,9 +122,9 @@ export const chatService = {
 
       // 2. Update memberIds array for easier querying
       const serverRef = doc(db, 'servers', serverId);
-      const serverSnap = await getDocs(query(collection(db, 'servers'), where('__name__', '==', serverId)));
-      if (!serverSnap.empty) {
-        const data = serverSnap.docs[0].data();
+      const serverSnap = await getDoc(serverRef);
+      if (serverSnap.exists()) {
+        const data = serverSnap.data();
         const memberIds = data.memberIds || [];
         if (!memberIds.includes(userId)) {
           await updateDoc(serverRef, {
@@ -132,6 +135,15 @@ export const chatService = {
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, path);
     }
+  },
+
+  listenToDiscoverableServers(callback: (servers: Server[]) => void) {
+    const path = 'servers';
+    const q = query(collection(db, path), where('isDiscoverable', '==', true));
+    return onSnapshot(q, (snapshot) => {
+      const servers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Server));
+      callback(servers);
+    }, (e) => handleFirestoreError(e, OperationType.LIST, path));
   },
 
   async updateServer(serverId: string, data: Partial<Server>) {
@@ -395,6 +407,7 @@ export const chatService = {
         channelId,
         mute: false,
         deaf: false,
+        video: false,
         isSpeaking: false,
         joinedAt: serverTimestamp()
       });
@@ -412,7 +425,7 @@ export const chatService = {
     }
   },
 
-  async updateVoiceState(userId: string, data: Partial<{ mute: boolean; deaf: boolean; isSpeaking: boolean }>) {
+  async updateVoiceState(userId: string, data: Partial<{ mute: boolean; deaf: boolean; isSpeaking: boolean; video: boolean }>) {
     const path = `voiceStates/${userId}`;
     try {
       await updateDoc(doc(db, 'voiceStates', userId), data);
@@ -482,6 +495,48 @@ export const chatService = {
       await batch.commit();
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, path);
+    }
+  },
+
+  // WebRTC Signaling
+  async sendSignal(from: string, to: string, channelId: string, type: 'offer' | 'answer' | 'candidate', signal: any) {
+    const path = 'videoSignals';
+    try {
+      await addDoc(collection(db, path), {
+        from,
+        to,
+        channelId,
+        type,
+        signal: JSON.stringify(signal),
+        createdAt: serverTimestamp()
+      });
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, path);
+    }
+  },
+
+  listenToSignals(userId: string, channelId: string, callback: (signals: any[]) => void) {
+    const path = 'videoSignals';
+    // Listen for signals addressed TO me in the current channel
+    const q = query(
+      collection(db, path),
+      where('to', '==', userId),
+      where('channelId', '==', channelId),
+      orderBy('createdAt', 'asc')
+    );
+
+    return onSnapshot(q, (snapshot) => {
+      const signals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      callback(signals);
+    }, (e) => handleFirestoreError(e, OperationType.LIST, path));
+  },
+
+  async clearSignal(signalId: string) {
+    const path = `videoSignals/${signalId}`;
+    try {
+      await deleteDoc(doc(db, 'videoSignals', signalId));
+    } catch (e) {
+      handleFirestoreError(e, OperationType.DELETE, path);
     }
   }
 };

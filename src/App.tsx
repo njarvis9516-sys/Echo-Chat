@@ -20,7 +20,12 @@ import {
   Trash2,
   Pencil,
   Smile,
-  X
+  X,
+  Compass,
+  Search as SearchIcon,
+  Globe,
+  Video,
+  VideoOff
 } from 'lucide-react';
 import { format } from 'date-fns';
 import EmojiPicker, { Theme, EmojiClickData } from 'emoji-picker-react';
@@ -29,6 +34,7 @@ import { signInWithGoogle, logOut } from './lib/firebase';
 import { chatService } from './services/chatService';
 import { Server, Channel, Message, UserProfile, VoiceState, Notification } from './types';
 import { cn } from './lib/utils';
+import { useWebRTC } from './hooks/useWebRTC';
 
 const StatusBadge = ({ status, className }: { status: UserProfile['status'], className?: string }) => {
   const colors = {
@@ -58,13 +64,17 @@ export default function App() {
   const [isCreatingServer, setIsCreatingServer] = useState(false);
   const [isCreatingServerLoading, setIsCreatingServerLoading] = useState(false);
   const [newServerName, setNewServerName] = useState('');
+  const [newServerDescription, setNewServerDescription] = useState('');
   const [newServerIconURL, setNewServerIconURL] = useState('');
+  const [isNewServerDiscoverable, setIsNewServerDiscoverable] = useState(true);
   const [isCreatingChannel, setIsCreatingChannel] = useState(false);
   const [newChannelName, setNewChannelName] = useState('');
   const [isServerSettingsOpen, setIsServerSettingsOpen] = useState(false);
   const [isUserSettingsOpen, setIsUserSettingsOpen] = useState(false);
   const [editServerName, setEditServerName] = useState('');
+  const [editServerDescription, setEditServerDescription] = useState('');
   const [editServerIconURL, setEditServerIconURL] = useState('');
+  const [isEditServerDiscoverable, setIsEditServerDiscoverable] = useState(true);
   
   const [editDisplayName, setEditDisplayName] = useState('');
   const [editUsername, setEditUsername] = useState('');
@@ -89,8 +99,20 @@ export default function App() {
   const [isEmojiPickerOpen, setIsEmojiPickerOpen] = useState(false);
   const [reactionMessageId, setReactionMessageId] = useState<string | null>(null);
   const [reactionPickerRef, setReactionPickerRef] = useState<HTMLDivElement | null>(null);
+  const [view, setView] = useState<'chat' | 'discovery'>('chat');
+  const [isVideoEnabled, setIsVideoEnabled] = useState(false);
+
+  const { remoteStreams, localStream } = useWebRTC(
+    user?.uid,
+    selectedChannelId || undefined,
+    voiceStates,
+    isVideoEnabled,
+    isMuted
+  );
   
   const [serverSearchQuery, setServerSearchQuery] = useState('');
+
+  const [discoverableServers, setDiscoverableServers] = useState<Server[]>([]);
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const emojiPickerRef = useRef<HTMLDivElement>(null);
@@ -99,6 +121,22 @@ export default function App() {
   const filteredServers = servers.filter(s => 
     s.name.toLowerCase().includes(serverSearchQuery.toLowerCase())
   );
+
+  const handleJoinServer = async (serverId: string) => {
+    if (!user) return;
+    try {
+      await chatService.joinServer(serverId, user.uid);
+      setSelectedServerId(serverId);
+      setView('chat');
+    } catch (error) {
+      console.error('Failed to join server:', error);
+    }
+  };
+
+  useEffect(() => {
+    const unsub = chatService.listenToDiscoverableServers(setDiscoverableServers);
+    return () => unsub();
+  }, []);
 
   // Activity Tracking
   useEffect(() => {
@@ -276,7 +314,9 @@ export default function App() {
   useEffect(() => {
     if (activeServer && isServerSettingsOpen) {
       setEditServerName(activeServer.name);
+      setEditServerDescription(activeServer.description || '');
       setEditServerIconURL(activeServer.iconURL || '');
+      setIsEditServerDiscoverable(activeServer.isDiscoverable !== false);
     }
   }, [isServerSettingsOpen, activeServer]);
 
@@ -425,10 +465,24 @@ export default function App() {
     if (!newServerName.trim() || !user || isCreatingServerLoading) return;
     setIsCreatingServerLoading(true);
     try {
-      await chatService.createServer(newServerName, user.uid, newServerIconURL.trim() || undefined);
-      setNewServerName('');
-      setNewServerIconURL('');
-      setIsCreatingServer(false);
+      const serverId = await chatService.createServer(
+        newServerName.trim(), 
+        user.uid, 
+        newServerIconURL.trim() || undefined,
+        newServerDescription.trim() || undefined
+      );
+      // Update discoverability separately if needed or handle it in createServer
+      if (serverId && !isNewServerDiscoverable) {
+        await chatService.updateServer(serverId, { isDiscoverable: false });
+      }
+      if (serverId) {
+        setSelectedServerId(serverId);
+        setNewServerName('');
+        setNewServerDescription('');
+        setNewServerIconURL('');
+        setIsCreatingServer(false);
+        setView('chat');
+      }
     } catch (error) {
       console.error('Failed to create server:', error);
     } finally {
@@ -452,6 +506,7 @@ export default function App() {
 
   const handleLeaveVoice = async () => {
     if (!user) return;
+    setIsVideoEnabled(false);
     await chatService.leaveVoice(user.uid);
   };
 
@@ -469,11 +524,20 @@ export default function App() {
     await chatService.updateVoiceState(user.uid, { deaf: newDeaf, mute: newDeaf || isMuted });
   };
 
+  const toggleVideo = async () => {
+    if (!user) return;
+    const newVideo = !isVideoEnabled;
+    setIsVideoEnabled(newVideo);
+    await chatService.updateVoiceState(user.uid, { video: newVideo });
+  };
+
   const handleUpdateServer = async () => {
     if (!selectedServerId || !editServerName.trim()) return;
     await chatService.updateServer(selectedServerId, {
-      name: editServerName,
-      iconURL: editServerIconURL.trim() || undefined
+      name: editServerName.trim(),
+      description: editServerDescription.trim(),
+      iconURL: editServerIconURL.trim() || undefined,
+      isDiscoverable: isEditServerDiscoverable
     });
     setIsServerSettingsOpen(false);
   };
@@ -678,7 +742,10 @@ export default function App() {
         </div>
 
         <div 
-          onClick={() => setSelectedServerId('')}
+          onClick={() => {
+            setSelectedServerId('');
+            setView('chat');
+          }}
           className="w-12 h-12 bg-[#313338] rounded-[24px] hover:rounded-[16px] hover:bg-[#5865f2] hover:text-white transition-all flex items-center justify-center cursor-pointer mb-2 group relative"
         >
           <div className="absolute -left-1 w-1 h-2 bg-white rounded-r-full hidden group-hover:block" />
@@ -689,7 +756,10 @@ export default function App() {
         {filteredServers.map((server) => (
           <div 
             key={server.id}
-            onClick={() => setSelectedServerId(server.id)}
+            onClick={() => {
+              setSelectedServerId(server.id);
+              setView('chat');
+            }}
             className={cn(
               "w-12 h-12 bg-[#313338] transition-all flex items-center justify-center cursor-pointer group relative overflow-hidden",
               selectedServerId === server.id ? "rounded-[16px] bg-[#5865f2] text-white" : "rounded-[24px] hover:rounded-[16px] hover:bg-[#5865f2] hover:text-white"
@@ -711,9 +781,30 @@ export default function App() {
 
         <div 
           onClick={() => setIsCreatingServer(true)}
-          className="w-12 h-12 bg-[#313338] rounded-[24px] hover:rounded-[16px] hover:bg-[#23a559] hover:text-white transition-all flex items-center justify-center cursor-pointer"
+          className="w-12 h-12 bg-[#313338] rounded-[24px] hover:rounded-[16px] hover:bg-[#23a559] hover:text-white transition-all flex items-center justify-center cursor-pointer mb-2"
         >
           <Plus size={24} />
+        </div>
+
+        <div className="mt-auto pb-4 flex flex-col gap-2">
+          <div 
+            onClick={() => {
+              setView('discovery');
+              setSelectedServerId(null);
+            }}
+            className={cn(
+              "w-12 h-12 transition-all flex items-center justify-center cursor-pointer group relative",
+              view === 'discovery' ? "rounded-[16px] bg-[#23a559] text-white" : "bg-[#313338] rounded-[24px] hover:rounded-[16px] hover:bg-[#23a559] hover:text-white"
+            )}
+          >
+            {view === 'discovery' && (
+              <div className="absolute -left-1 w-2 h-10 bg-white rounded-r-full" />
+            )}
+            <Compass size={24} />
+            <div className="absolute left-16 bg-black px-3 py-1.5 rounded-md text-sm font-bold text-white whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-50 pointer-events-none">
+              Explore Discoverable Servers
+            </div>
+          </div>
         </div>
       </div>
 
@@ -834,6 +925,13 @@ export default function App() {
                 </div>
               </div>
               <div className="flex items-center gap-1">
+                <button 
+                  onClick={toggleVideo}
+                  className={cn("p-1.5 rounded transition-colors", isVideoEnabled ? "bg-[#23a559] text-white" : "hover:bg-white/10 text-[#dbdee1]")}
+                  title={isVideoEnabled ? "Turn off camera" : "Turn on camera"}
+                >
+                  {isVideoEnabled ? <Video size={16} /> : <VideoOff size={16} />}
+                </button>
                 <button className="p-1.5 hover:bg-white/10 rounded transition-colors" title="Noise Suppression">
                   <Search size={14} className="opacity-60" />
                 </button>
@@ -861,6 +959,13 @@ export default function App() {
           </div>
           <div className="flex items-center gap-1">
             <div 
+              onClick={toggleVideo}
+              className={cn("p-1.5 hover:bg-white/10 rounded-md cursor-pointer transition-colors", isVideoEnabled && "text-[#23a559]")} 
+              title={isVideoEnabled ? "Turn off camera" : "Turn on camera"}
+            >
+              {isVideoEnabled ? <Video size={18} /> : <VideoOff size={18} />}
+            </div>
+            <div 
               onClick={toggleMute}
               className={cn("p-1.5 hover:bg-white/10 rounded-md cursor-pointer transition-colors", isMuted && "text-red-400")} 
               title={isMuted ? "Unmute" : "Mute"}
@@ -881,10 +986,144 @@ export default function App() {
         </div>
       </div>
 
-      {/* 3. Main Chat/Voice Area */}
+      {/* 3. Main Content Area */}
       <div className="flex-1 flex flex-col bg-[#313338]">
-        {/* Header */}
-        <div className="h-12 px-4 flex items-center justify-between border-b border-[#1e1f22] shadow-sm">
+        {view === 'discovery' ? (
+          <div className="flex-1 flex flex-col overflow-hidden">
+            {/* Discovery Header */}
+            <div className="h-12 px-6 flex items-center justify-between border-b border-[#1e1f22] bg-[#2b2d31]">
+              <div className="flex items-center gap-2">
+                <Compass size={20} className="text-[#dbdee1] opacity-60" />
+                <h3 className="font-bold text-white">Discovery</h3>
+              </div>
+            </div>
+            
+            {/* Discovery Content */}
+            <div className="flex-1 overflow-y-auto bg-[#313338]">
+              {/* Hero Section */}
+              <div className="relative h-72 w-full overflow-hidden mb-8">
+                <img 
+                  src="https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=2000&auto=format&fit=crop" 
+                  alt="Discovery Hero" 
+                  className="w-full h-full object-cover opacity-50"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-[#313338] to-transparent" />
+                <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-4">
+                  <h1 className="text-4xl font-extrabold text-white mb-4 drop-shadow-xl">Find your community on Echo</h1>
+                  <p className="text-xl text-[#dbdee1] max-w-xl mx-auto drop-shadow-md mb-8">From gaming, to music, to learning, there's a place for you.</p>
+                  
+                  <div className="relative w-full max-w-2xl group">
+                    <SearchIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-[#949ba4] group-focus-within:text-white transition-colors" size={24} />
+                    <input 
+                      type="text" 
+                      placeholder="Explore communities..."
+                      className="w-full bg-[#1e1f22] text-white text-lg rounded-lg pl-14 pr-6 py-4 outline-none focus:ring-4 focus:ring-[#5865f2]/20 transition-all placeholder:text-[#949ba4]"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Server Grid */}
+              <div className="px-8 pb-12 max-w-6xl mx-auto">
+                <div className="flex items-center justify-between mb-6">
+                  <h2 className="text-xl font-bold text-white">Featured Communities</h2>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {discoverableServers.length > 0 ? (
+                    discoverableServers.map((s) => {
+                      const isMember = user && s.memberIds?.includes(user.uid);
+                      return (
+                        <motion.div 
+                          key={s.id}
+                          whileHover={{ y: -4 }}
+                          className="bg-[#2b2d31] rounded-lg overflow-hidden group cursor-pointer shadow-lg hover:shadow-2xl transition-all border border-white/5"
+                        >
+                          <div className="h-32 w-full relative">
+                            <img src={s.bannerURL || "https://images.unsplash.com/photo-1511447333035-4d398108cd4e?q=80&w=800&auto=format&fit=crop"} className="w-full h-full object-cover" alt="" />
+                            <div className="absolute -bottom-10 left-4 w-16 h-16 rounded-2xl bg-[#313338] p-1 shadow-xl">
+                              {s.iconURL ? (
+                                <img src={s.iconURL} className="w-full h-full rounded-xl object-cover" alt="" />
+                              ) : (
+                                <div className="w-full h-full rounded-xl bg-[#5865f2] flex items-center justify-center text-white font-bold text-xl uppercase">
+                                  {s.name.substring(0, 1)}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <div className="pt-12 p-5">
+                            <div className="flex items-center gap-2 mb-2">
+                              <h3 className="font-bold text-white text-lg group-hover:text-[#00a8fc] transition-colors">{s.name}</h3>
+                              {s.memberIds && s.memberIds.length > 10 && <div className="bg-[#23a559]/20 text-[#23a559] text-[10px] uppercase font-bold px-1.5 py-0.5 rounded">Popular</div>}
+                            </div>
+                            <p className="text-sm text-[#b5bac1] line-clamp-2 mb-6 h-10 leading-relaxed">
+                              {s.description || "A community waiting for you to join."}
+                            </p>
+                            <div className="flex items-center justify-between pt-4 border-t border-white/5">
+                              <div className="flex items-center gap-2 text-xs font-medium text-[#949ba4]">
+                                <div className="w-2 h-2 rounded-full bg-[#23a559]" />
+                                {s.memberIds?.length || 0} Members
+                              </div>
+                              {isMember ? (
+                                <button 
+                                  onClick={() => {
+                                    setSelectedServerId(s.id);
+                                    setView('chat');
+                                  }}
+                                  className="bg-[#23a559] hover:bg-[#1a8b47] text-white text-xs font-bold px-4 py-2 rounded transition-colors"
+                                >
+                                  View Server
+                                </button>
+                              ) : (
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleJoinServer(s.id);
+                                  }}
+                                  className="bg-[#5865f2] hover:bg-[#4752c4] text-white text-xs font-bold px-4 py-2 rounded transition-colors"
+                                >
+                                  Join Server
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </motion.div>
+                      );
+                    })
+                  ) : (
+                    // Initial seed servers if database is empty
+                    [
+                      { id: ' Gaming Hub', name: 'Gaming Hub', description: 'The best place for competitive and casual gaming alike.', members: '125k', banner: 'https://images.unsplash.com/photo-1542751371-adc38448a05e' },
+                      { id: ' anime', name: 'Anime World', description: 'Discuss your favorite seasonal anime and classic series.', members: '82k', banner: 'https://images.unsplash.com/photo-1578632292335-df3abbb0d586' },
+                      { id: ' dev', name: 'Developer Den', description: 'Tech talks, coding help, and project showcases.', members: '45k', banner: 'https://images.unsplash.com/photo-1461749280684-dccba630e2f6' }
+                    ].map(s => (
+                      <div key={s.id} className="bg-[#2b2d31] rounded-lg overflow-hidden border border-white/5 opacity-80 grayscale-[0.5]">
+                        <div className="h-32 w-full bg-[#1e1f22] overflow-hidden">
+                          <img src={`${s.banner}?q=80&w=400&auto=format&fit=crop`} className="w-full h-full object-cover" />
+                        </div>
+                        <div className="p-5">
+                          <h3 className="font-bold text-white mb-2">{s.name}</h3>
+                          <p className="text-xs text-[#b5bac1] mb-4">{s.description}</p>
+                          <button className="w-full py-2 bg-[#313338] text-white text-xs font-bold rounded cursor-not-allowed">Coming Soon</button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+                
+                {/* Visualizer placeholder matching drawing */}
+                <div className="mt-12 bg-[#2b2d31] rounded-xl p-8 border border-dashed border-white/10 flex flex-col items-center justify-center text-center opacity-40">
+                  <Globe size={48} className="mb-4" />
+                  <h3 className="text-lg font-bold">More servers coming soon</h3>
+                  <p className="text-sm">We're expanding our community every day. Stay tuned!</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Header */}
+            <div className="h-12 px-4 flex items-center justify-between border-b border-[#1e1f22] shadow-sm">
           <div className="flex items-center gap-2">
             {activeChannel?.type === 'voice' ? <Volume2 size={24} className="opacity-40" /> : <Hash size={24} className="opacity-40" />}
             <h3 className="font-bold text-white">{activeChannel?.name || 'general'}</h3>
@@ -950,24 +1189,67 @@ export default function App() {
         <div className="flex-1 flex overflow-hidden">
           <div className="flex-1 flex flex-col min-w-0">
             {activeChannel?.type === 'voice' ? (
-          <div className="flex-1 bg-[#2b2d31] p-8 overflow-y-auto">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {voiceStates.filter(vs => vs.channelId === activeChannel.id).map(vs => {
-                const p = allUsers.find(u => u.uid === vs.userId);
-                return (
-                  <div key={vs.userId} className="relative aspect-video bg-[#1e1f22] rounded-lg overflow-hidden flex items-center justify-center group border-2 border-transparent hover:border-[#5865f2] transition-colors shadow-xl">
-                    <img src={p?.photoURL || null} alt="" className={cn("w-20 h-20 rounded-full transition-all duration-300", vs.isSpeaking ? "ring-4 ring-[#23a559]" : "opacity-60")} />
-                    <div className="absolute bottom-3 left-3 flex items-center gap-2 bg-black/40 px-2 py-1 rounded text-sm text-white">
-                      <span>{p?.displayName}</span>
-                      {vs.mute && <MicOff size={14} className="text-red-400" />}
-                      {vs.deaf && <Headphones size={14} className="text-red-400" />}
+              <div className="flex-1 bg-[#2b2d31] p-8 overflow-y-auto">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+                  {/* Local Video */}
+                  {isVideoEnabled && (
+                    <div className="relative aspect-video bg-[#1e1f22] rounded-xl overflow-hidden flex items-center justify-center border-2 border-[#5865f2] shadow-2xl">
+                      <video 
+                        ref={(ref) => { if (ref && localStream) ref.srcObject = localStream; }}
+                        autoPlay 
+                        muted 
+                        className="w-full h-full object-cover"
+                      />
+                      <div className="absolute bottom-4 left-4 flex items-center gap-2 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg text-sm text-white font-bold border border-white/10">
+                        <div className="w-2 h-2 bg-[#23a559] rounded-full animate-pulse" />
+                        <span>{profile?.displayName} (You)</span>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ) : (
+                  )}
+
+                  {/* Remote Videos */}
+                  {voiceStates.filter(vs => vs.channelId === activeChannel.id && vs.userId !== user?.uid).map(vs => {
+                    const p = allUsers.find(u => u.uid === vs.userId);
+                    const stream = remoteStreams[vs.userId];
+                    
+                    return (
+                      <div key={vs.userId} className={cn(
+                        "relative aspect-video bg-[#1e1f22] rounded-xl overflow-hidden flex items-center justify-center border-2 transition-all duration-300 group shadow-xl",
+                        vs.isSpeaking ? "border-[#23a559]" : "border-white/5 hover:border-[#5865f2]"
+                      )}>
+                        {vs.video && stream ? (
+                          <video 
+                            ref={(ref) => { if (ref) ref.srcObject = stream; }}
+                            autoPlay 
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex flex-col items-center gap-4">
+                            <img 
+                              src={p?.photoURL || null} 
+                              alt="" 
+                              className={cn(
+                                "w-24 h-24 rounded-full transition-all duration-500",
+                                vs.isSpeaking ? "scale-110 ring-4 ring-[#23a559]" : "opacity-40 grayscale-[0.5]"
+                              )} 
+                            />
+                            {vs.video && (
+                              <div className="flex flex-col items-center gap-1">
+                                <div className="text-xs text-white/40 font-medium animate-pulse">Establishing connection...</div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        <div className="absolute bottom-4 left-4 flex items-center gap-2 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg text-sm text-white font-bold border border-white/10">
+                          {p?.displayName}
+                          {vs.mute && <MicOff size={14} className="text-red-400" />}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
           <>
             {/* Messages */}
             <div 
@@ -1286,45 +1568,49 @@ export default function App() {
         </div>
       </>
     )}
-  </div>
+          </div>
+        </div>
+      </>
+    )}
+</div>
 
-      {/* 4. Member Sidebar */}
-      <AnimatePresence>
-        {isUserListOpen && (
-          <motion.div 
-            initial={{ width: 0, opacity: 0 }}
-            animate={{ width: 240, opacity: 1 }}
-            exit={{ width: 0, opacity: 0 }}
-            className="w-60 bg-[#2b2d31] border-l border-[#1e1f22] flex flex-col flex-shrink-0"
-          >
-         <div className="h-12 px-4 flex items-center border-b border-[#1e1f22] shadow-sm">
-           <span className="text-xs font-bold uppercase opacity-60 tracking-wider">Members — {allUsers.length}</span>
-         </div>
-         <div className="flex-1 overflow-y-auto p-3 space-y-4">
-           <div>
-             <h4 className="text-xs font-bold uppercase opacity-60 px-2 mb-2">Users</h4>
-             <div className="space-y-0.5">
-               {allUsers.map((u) => (
-                 <div key={u.uid} className="flex items-center gap-3 px-2 py-1.5 rounded-md hover:bg-white/[0.04] cursor-pointer group">
-                   <div className="relative flex-shrink-0">
-                     <img src={u.photoURL || null} alt={u.displayName} className="w-8 h-8 rounded-full" />
-                     <StatusBadge status={u.status || 'offline'} className="absolute -bottom-0.5 -right-0.5 border-[#2b2d31]" />
-                   </div>
-                   <div className="flex-1 truncate">
-                     <p className={cn("text-sm font-medium transition-colors", u.status === 'offline' ? "opacity-30" : "text-[#dbdee1] group-hover:text-white")}>
-                       {u.displayName}
-                     </p>
-                   </div>
-                 </div>
-               ))}
-             </div>
-           </div>
-         </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  </div>
+  {/* 4. Member Sidebar */}
+  {view === 'chat' && (
+    <AnimatePresence>
+      {isUserListOpen && (
+        <motion.div 
+          initial={{ width: 0, opacity: 0 }}
+          animate={{ width: 240, opacity: 1 }}
+          exit={{ width: 0, opacity: 0 }}
+          className="w-60 bg-[#2b2d31] border-l border-[#1e1f22] flex flex-col flex-shrink-0"
+        >
+          <div className="h-12 px-4 flex items-center border-b border-[#1e1f22] shadow-sm">
+            <span className="text-xs font-bold uppercase opacity-60 tracking-wider">Members — {allUsers.length}</span>
+          </div>
+          <div className="flex-1 overflow-y-auto p-3 space-y-4">
+            <div>
+              <h4 className="text-xs font-bold uppercase opacity-60 px-2 mb-2">Users</h4>
+              <div className="space-y-0.5">
+                {allUsers.map((u) => (
+                  <div key={u.uid} className="flex items-center gap-3 px-2 py-1.5 rounded-md hover:bg-white/[0.04] cursor-pointer group">
+                    <div className="relative flex-shrink-0">
+                      <img src={u.photoURL || null} alt={u.displayName} className="w-8 h-8 rounded-full" />
+                      <StatusBadge status={u.status || 'offline'} className="absolute -bottom-0.5 -right-0.5 border-[#2b2d31]" />
+                    </div>
+                    <div className="flex-1 truncate">
+                      <p className={cn("text-sm font-medium transition-colors", u.status === 'offline' ? "opacity-30" : "text-[#dbdee1] group-hover:text-white")}>
+                        {u.displayName}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  )}
 
   {/* Message Reaction Picker */}
   <AnimatePresence>
@@ -1391,6 +1677,15 @@ export default function App() {
                     />
                   </div>
                   <div className="flex flex-col gap-2">
+                    <label className="text-xs font-bold uppercase opacity-60">Description</label>
+                    <textarea 
+                      value={newServerDescription}
+                      onChange={(e) => setNewServerDescription(e.target.value)}
+                      placeholder="What is your server about?"
+                      className="bg-[#1e1f22] p-3 rounded-md outline-none text-white focus:ring-2 ring-[#5865f2] transition-shadow h-20 resize-none text-sm"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
                     <label className="text-xs font-bold uppercase opacity-60">Icon URL (Optional)</label>
                     <input 
                       value={newServerIconURL}
@@ -1398,6 +1693,26 @@ export default function App() {
                       placeholder="https://example.com/icon.png"
                       className="bg-[#1e1f22] p-3 rounded-md outline-none text-white focus:ring-2 ring-[#5865f2] transition-shadow"
                     />
+                  </div>
+
+                  <div 
+                    onClick={() => setIsNewServerDiscoverable(!isNewServerDiscoverable)}
+                    className="flex items-center justify-between p-3 bg-[#1e1f22] rounded-md cursor-pointer hover:bg-[#2b2d31] transition-colors"
+                  >
+                    <div>
+                      <div className="text-sm font-bold text-white">Discoverable Server</div>
+                      <div className="text-[10px] uppercase font-bold text-[#23a559] mt-0.5">Recommended</div>
+                      <div className="text-xs opacity-60 mt-1">Allow anyone to find and join this server in Discovery.</div>
+                    </div>
+                    <div className={cn(
+                      "w-10 h-6 rounded-full transition-colors relative flex items-center",
+                      isNewServerDiscoverable ? "bg-[#23a559]" : "bg-white/10"
+                    )}>
+                      <div className={cn(
+                        "w-4 h-4 bg-white rounded-full shadow-lg transition-transform",
+                        isNewServerDiscoverable ? "translate-x-5" : "translate-x-1"
+                      )} />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1541,6 +1856,15 @@ export default function App() {
                     />
                   </div>
                   <div className="flex flex-col gap-2">
+                    <label className="text-xs font-bold uppercase opacity-60">Description</label>
+                    <textarea 
+                      value={editServerDescription}
+                      onChange={(e) => setEditServerDescription(e.target.value)}
+                      placeholder="About this server..."
+                      className="bg-[#1e1f22] p-3 rounded-md outline-none text-white focus:ring-2 ring-[#5865f2] transition-shadow h-20 resize-none text-sm"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
                     <label className="text-xs font-bold uppercase opacity-60">Icon URL</label>
                     <input 
                       value={editServerIconURL}
@@ -1548,6 +1872,25 @@ export default function App() {
                       placeholder="https://example.com/icon.png"
                       className="bg-[#1e1f22] p-3 rounded-md outline-none text-white focus:ring-2 ring-[#5865f2] transition-shadow"
                     />
+                  </div>
+
+                  <div 
+                    onClick={() => setIsEditServerDiscoverable(!isEditServerDiscoverable)}
+                    className="flex items-center justify-between p-3 bg-[#1e1f22] rounded-md cursor-pointer hover:bg-[#2b2d31] transition-colors"
+                  >
+                    <div>
+                      <div className="text-sm font-bold text-white">Discoverable Server</div>
+                      <div className="text-xs opacity-60">Visible in the community Discovery tab.</div>
+                    </div>
+                    <div className={cn(
+                      "w-10 h-6 rounded-full transition-colors relative flex items-center",
+                      isEditServerDiscoverable ? "bg-[#23a559]" : "bg-white/10"
+                    )}>
+                      <div className={cn(
+                        "w-4 h-4 bg-white rounded-full shadow-lg transition-transform",
+                        isEditServerDiscoverable ? "translate-x-5" : "translate-x-1"
+                      )} />
+                    </div>
                   </div>
                 </div>
 
