@@ -1,9 +1,11 @@
 export interface UserProfile {
   uid: string;
+  username: string; // Unique identifier/handle
   displayName: string;
   email: string;
   photoURL: string;
   status: 'online' | 'idle' | 'dnd' | 'offline';
+  customStatus?: string;
   createdAt: string;
 }
 
@@ -11,6 +13,7 @@ export interface Server {
   id: string;
   name: string;
   ownerId: string;
+  memberIds: string[];
   iconURL?: string;
   createdAt: string;
 }
@@ -32,6 +35,8 @@ export interface Message {
   timestamp: any;
   userDisplayName: string;
   userPhotoURL: string;
+  updatedAt?: any;
+  reactions?: Record<string, string[]>;
 }
 
 export interface ServerMember {

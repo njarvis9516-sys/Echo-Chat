@@ -16,9 +16,14 @@ import {
   Users,
   PhoneOff,
   ChevronDown,
-  Bell
+  Bell,
+  Trash2,
+  Pencil,
+  Smile,
+  X
 } from 'lucide-react';
 import { format } from 'date-fns';
+import EmojiPicker, { Theme, EmojiClickData } from 'emoji-picker-react';
 import { useAuth } from './hooks/useAuth';
 import { signInWithGoogle, logOut } from './lib/firebase';
 import { chatService } from './services/chatService';
@@ -45,28 +50,51 @@ export default function App() {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [messageLimit, setMessageLimit] = useState(50);
+  const [hasMoreMessages, setHasMoreMessages] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [messageInput, setMessageInput] = useState('');
   const [isCreatingServer, setIsCreatingServer] = useState(false);
+  const [isCreatingServerLoading, setIsCreatingServerLoading] = useState(false);
   const [newServerName, setNewServerName] = useState('');
   const [newServerIconURL, setNewServerIconURL] = useState('');
   const [isCreatingChannel, setIsCreatingChannel] = useState(false);
   const [newChannelName, setNewChannelName] = useState('');
   const [isServerSettingsOpen, setIsServerSettingsOpen] = useState(false);
+  const [isUserSettingsOpen, setIsUserSettingsOpen] = useState(false);
   const [editServerName, setEditServerName] = useState('');
   const [editServerIconURL, setEditServerIconURL] = useState('');
+  
+  const [editDisplayName, setEditDisplayName] = useState('');
+  const [editUsername, setEditUsername] = useState('');
+  const [editPhotoURL, setEditPhotoURL] = useState('');
+  const [editCustomStatus, setEditCustomStatus] = useState('');
+  const [usernameError, setUsernameError] = useState('');
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const [voiceStates, setVoiceStates] = useState<VoiceState[]>([]);
   const [newChannelType, setNewChannelType] = useState<'text' | 'voice'>('text');
+  const [isDeletingServer, setIsDeletingServer] = useState(false);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editInput, setEditInput] = useState('');
   const [isMuted, setIsMuted] = useState(false);
   const [isDeafened, setIsDeafened] = useState(false);
   const [mentionSuggestions, setMentionSuggestions] = useState<UserProfile[]>([]);
   const [mentionTriggerIndex, setMentionTriggerIndex] = useState<number | null>(null);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [isUserListOpen, setIsUserListOpen] = useState(true);
+  const [isEmojiPickerOpen, setIsEmojiPickerOpen] = useState(false);
+  const [reactionMessageId, setReactionMessageId] = useState<string | null>(null);
+  const [reactionPickerRef, setReactionPickerRef] = useState<HTMLDivElement | null>(null);
   
   const [serverSearchQuery, setServerSearchQuery] = useState('');
   
   const scrollRef = useRef<HTMLDivElement>(null);
+  const emojiPickerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const filteredServers = servers.filter(s => 
     s.name.toLowerCase().includes(serverSearchQuery.toLowerCase())
@@ -99,6 +127,20 @@ export default function App() {
     };
   }, [profile?.uid]);
 
+  // Click outside to close emoji picker
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (emojiPickerRef.current && !emojiPickerRef.current.contains(event.target as Node)) {
+        setIsEmojiPickerOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
   // Listen to all users (for status tracking in this demo)
   useEffect(() => {
     if (user) {
@@ -110,7 +152,7 @@ export default function App() {
   // Listen to servers
   useEffect(() => {
     if (user) {
-      const unsub = chatService.listenToServers((data) => {
+      const unsub = chatService.listenToServers(user.uid, (data) => {
         setServers(data);
         if (data.length > 0 && !selectedServerId) {
           setSelectedServerId(data[0].id);
@@ -136,10 +178,21 @@ export default function App() {
   // Listen to messages
   useEffect(() => {
     if (selectedChannelId) {
-      const unsub = chatService.listenToMessages(selectedChannelId, setMessages);
+      setMessages([]);
+      setMessageLimit(50);
+      setHasMoreMessages(true);
+      setIsInitialLoad(true);
+      
+      const unsub = chatService.listenToMessages(selectedChannelId, messageLimit, (data) => {
+        setMessages(data);
+        if (data.length < messageLimit) {
+          setHasMoreMessages(false);
+        }
+        setIsInitialLoad(false);
+      });
       return unsub;
     }
-  }, [selectedChannelId]);
+  }, [selectedChannelId, messageLimit]);
 
   // Listen to voice states
   useEffect(() => {
@@ -164,12 +217,58 @@ export default function App() {
     }
   }, [user]);
 
-  // Scroll to bottom on new messages
+  // Scroll to bottom functionality
   useEffect(() => {
-    if (scrollRef.current) {
+    if (scrollRef.current && (isInitialLoad || isNearBottom())) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, isInitialLoad]);
+
+  const isNearBottom = () => {
+    if (!scrollRef.current) return false;
+    const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
+    return scrollHeight - scrollTop - clientHeight < 150;
+  };
+
+  const handleLoadMore = () => {
+    if (!hasMoreMessages || isLoadingMore) return;
+    setIsLoadingMore(true);
+    // Just increase limit, the listener will handle the rest
+    setMessageLimit(prev => prev + 50);
+    setIsLoadingMore(false);
+  };
+
+  const onEmojiClick = (emojiData: EmojiClickData) => {
+    const emoji = emojiData.emoji;
+    const start = messageInput.substring(0, inputRef.current?.selectionStart || 0);
+    const end = messageInput.substring(inputRef.current?.selectionEnd || 0);
+    
+    const newValue = start + emoji + end;
+    setMessageInput(newValue);
+    
+    // Focus back to input
+    setTimeout(() => {
+      if (inputRef.current) {
+        inputRef.current.focus();
+        const newPos = start.length + emoji.length;
+        inputRef.current.setSelectionRange(newPos, newPos);
+      }
+    }, 0);
+  };
+
+  const handleToggleReaction = async (messageId: string, emoji: string) => {
+    if (!selectedChannelId || !user) return;
+    try {
+      await chatService.toggleReaction(selectedChannelId, messageId, emoji, user.uid);
+    } catch (error) {
+      console.error('Failed to toggle reaction:', error);
+    }
+  };
+
+  const onReactionEmojiClick = (emojiData: EmojiClickData, messageId: string) => {
+    handleToggleReaction(messageId, emojiData.emoji);
+    setReactionMessageId(null);
+  };
 
   const activeServer = servers.find(s => s.id === selectedServerId);
   const activeChannel = channels.find(c => c.id === selectedChannelId);
@@ -181,8 +280,8 @@ export default function App() {
     }
   }, [isServerSettingsOpen, activeServer]);
 
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSendMessage = async (e?: React.FormEvent) => {
+    e?.preventDefault();
     if (!messageInput.trim() || !selectedServerId || !selectedChannelId || !profile) return;
     
     const content = messageInput;
@@ -220,11 +319,43 @@ export default function App() {
     }
   };
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value;
+  const handleDeleteMessage = async (messageId: string) => {
+    if (!selectedChannelId) return;
+    try {
+      await chatService.deleteMessage(selectedChannelId, messageId);
+    } catch (error) {
+      console.error('Failed to delete message:', error);
+    }
+  };
+
+  const handleEditMessage = async (messageId: string) => {
+    if (!selectedChannelId || !editInput.trim()) return;
+    try {
+      await chatService.updateMessage(selectedChannelId, messageId, editInput);
+      setEditingMessageId(null);
+      setEditInput('');
+    } catch (error) {
+      console.error('Failed to edit message:', error);
+    }
+  };
+
+  const startEditing = (msg: Message) => {
+    setEditingMessageId(msg.id);
+    setEditInput(msg.content);
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const target = e.target;
+    const value = target.value;
     setMessageInput(value);
 
-    const cursorPosition = e.target.selectionStart || 0;
+    // Auto-resize textarea
+    if (target instanceof HTMLTextAreaElement) {
+      target.style.height = 'auto';
+      target.style.height = `${Math.min(target.scrollHeight, 200)}px`;
+    }
+
+    const cursorPosition = target.selectionStart || 0;
     const lastAtPos = value.lastIndexOf('@', cursorPosition - 1);
 
     if (lastAtPos !== -1) {
@@ -291,11 +422,18 @@ export default function App() {
     });
   };
   const handleCreateServer = async () => {
-    if (!newServerName.trim() || !user) return;
-    await chatService.createServer(newServerName, user.uid, newServerIconURL.trim() || undefined);
-    setNewServerName('');
-    setNewServerIconURL('');
-    setIsCreatingServer(false);
+    if (!newServerName.trim() || !user || isCreatingServerLoading) return;
+    setIsCreatingServerLoading(true);
+    try {
+      await chatService.createServer(newServerName, user.uid, newServerIconURL.trim() || undefined);
+      setNewServerName('');
+      setNewServerIconURL('');
+      setIsCreatingServer(false);
+    } catch (error) {
+      console.error('Failed to create server:', error);
+    } finally {
+      setIsCreatingServerLoading(false);
+    }
   };
 
   const handleCreateChannel = async () => {
@@ -340,12 +478,59 @@ export default function App() {
     setIsServerSettingsOpen(false);
   };
 
+  useEffect(() => {
+    if (profile && isUserSettingsOpen) {
+      setEditDisplayName(profile.displayName);
+      setEditUsername(profile.username || '');
+      setEditPhotoURL(profile.photoURL);
+      setEditCustomStatus(profile.customStatus || '');
+      setUsernameError('');
+    }
+  }, [isUserSettingsOpen, profile]);
+
+  const handleUpdateProfile = async () => {
+    if (!user || !profile) return;
+    if (!editDisplayName.trim() || !editUsername.trim()) return;
+    
+    setIsSavingProfile(true);
+    setUsernameError('');
+    
+    try {
+      // Check username uniqueness if changed
+      if (editUsername.toLowerCase() !== profile.username?.toLowerCase()) {
+        const isUnique = await chatService.isUsernameUnique(editUsername, user.uid);
+        if (!isUnique) {
+          setUsernameError('Username is already taken');
+          setIsSavingProfile(false);
+          return;
+        }
+      }
+      
+      await chatService.updateUserProfile(user.uid, {
+        displayName: editDisplayName,
+        username: editUsername,
+        photoURL: editPhotoURL,
+        customStatus: editCustomStatus
+      });
+      
+      setIsUserSettingsOpen(false);
+    } catch (error) {
+      console.error('Failed to update profile:', error);
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
+
   const handleDeleteServer = async () => {
-    if (!selectedServerId) return;
-    if (confirm('Are you sure you want to delete this server? This action is permanent.')) {
+    if (!selectedServerId || !isDeletingServer) return;
+    try {
       await chatService.deleteServer(selectedServerId);
-      setSelectedServerId(servers.find(s => s.id !== selectedServerId)?.id || null);
+      const remainingServers = servers.filter(s => s.id !== selectedServerId);
+      setSelectedServerId(remainingServers.length > 0 ? remainingServers[0].id : null);
+      setIsDeletingServer(false);
       setIsServerSettingsOpen(false);
+    } catch (error) {
+      console.error('Failed to delete server:', error);
     }
   };
 
@@ -363,7 +548,15 @@ export default function App() {
         setIsCreatingServer(false);
         setIsCreatingChannel(false);
         setIsServerSettingsOpen(false);
+        setIsDeletingServer(false);
+        setIsUserSettingsOpen(false);
         return;
+      }
+
+      // Settings (Ctrl + ,)
+      if (e.ctrlKey && e.key === ',') {
+        e.preventDefault();
+        setIsUserSettingsOpen(true);
       }
 
       // Voice Controls (Ctrl + Shift + ...)
@@ -611,7 +804,7 @@ export default function App() {
                           const participantProfile = allUsers.find(u => u.uid === vs.userId);
                           return (
                             <div key={vs.userId} className="flex items-center gap-2 py-0.5">
-                              <img src={participantProfile?.photoURL} alt="" className="w-5 h-5 rounded-full" />
+                              <img src={participantProfile?.photoURL || null} alt="" className="w-5 h-5 rounded-full" />
                               <span className="text-sm opacity-70 truncate">{participantProfile?.displayName}</span>
                               <div className="flex items-center gap-1 ml-auto mr-2">
                                 {vs.mute && <MicOff size={12} className="text-red-400" />}
@@ -659,7 +852,7 @@ export default function App() {
         {/* User bar */}
         <div className="bg-[#232428] p-2 flex items-center gap-2 mt-auto">
           <div className="relative group cursor-pointer">
-            <img src={profile?.photoURL} alt="User" className="w-10 h-10 rounded-full" />
+            <img src={profile?.photoURL || null} alt="User" className="w-10 h-10 rounded-full" />
             <StatusBadge status={profile?.status || 'offline'} className="absolute -bottom-0.5 -right-0.5 border-[#232428]" />
           </div>
           <div className="flex-1 truncate">
@@ -681,7 +874,7 @@ export default function App() {
             >
               <Headphones size={18} />
             </div>
-            <div className="p-1.5 hover:bg-white/10 rounded-md cursor-pointer transition-colors" title="Settings">
+            <div className="p-1.5 hover:bg-white/10 rounded-md cursor-pointer transition-colors" title="Settings" onClick={() => setIsUserSettingsOpen(true)}>
               <Settings size={18} />
             </div>
           </div>
@@ -749,19 +942,21 @@ export default function App() {
               )}
             </div>
             <Search size={20} className="cursor-pointer hover:text-white" />
-            <Users size={20} className="cursor-pointer hover:text-white" />
+            <Users size={20} className={cn("cursor-pointer hover:text-white", isUserListOpen && "text-white")} onClick={() => setIsUserListOpen(!isUserListOpen)} />
             <Plus size={20} className="cursor-pointer hover:text-white" />
           </div>
         </div>
 
-        {activeChannel?.type === 'voice' ? (
+        <div className="flex-1 flex overflow-hidden">
+          <div className="flex-1 flex flex-col min-w-0">
+            {activeChannel?.type === 'voice' ? (
           <div className="flex-1 bg-[#2b2d31] p-8 overflow-y-auto">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {voiceStates.filter(vs => vs.channelId === activeChannel.id).map(vs => {
                 const p = allUsers.find(u => u.uid === vs.userId);
                 return (
                   <div key={vs.userId} className="relative aspect-video bg-[#1e1f22] rounded-lg overflow-hidden flex items-center justify-center group border-2 border-transparent hover:border-[#5865f2] transition-colors shadow-xl">
-                    <img src={p?.photoURL} alt="" className={cn("w-20 h-20 rounded-full transition-all duration-300", vs.isSpeaking ? "ring-4 ring-[#23a559]" : "opacity-60")} />
+                    <img src={p?.photoURL || null} alt="" className={cn("w-20 h-20 rounded-full transition-all duration-300", vs.isSpeaking ? "ring-4 ring-[#23a559]" : "opacity-60")} />
                     <div className="absolute bottom-3 left-3 flex items-center gap-2 bg-black/40 px-2 py-1 rounded text-sm text-white">
                       <span>{p?.displayName}</span>
                       {vs.mute && <MicOff size={14} className="text-red-400" />}
@@ -788,7 +983,20 @@ export default function App() {
               <p>This is the start of the #{activeChannel?.name || 'this channel'} channel.</p>
             </div>
           ) : (
-            messages.map((msg, index) => {
+            <>
+              {hasMoreMessages && (
+                <div className="flex justify-center py-4">
+                  <button 
+                    onClick={handleLoadMore}
+                    disabled={isLoadingMore}
+                    className="text-sm font-medium text-[#00a8fc] hover:underline flex items-center gap-2"
+                  >
+                    {isLoadingMore && <div className="w-3 h-3 border-2 border-[#00a8fc]/20 border-t-[#00a8fc] rounded-full animate-spin" />}
+                    Load more messages
+                  </button>
+                </div>
+              )}
+              {messages.map((msg, index) => {
               const msgUser = allUsers.find(u => u.uid === msg.userId);
               const prevMsg = messages[index - 1];
               const isContinuation = prevMsg && prevMsg.userId === msg.userId && 
@@ -800,35 +1008,202 @@ export default function App() {
                     <span className="absolute left-4 top-2 text-[10px] font-medium opacity-0 group-hover:opacity-40 text-center w-8">
                       {msg.timestamp ? format(msg.timestamp.toDate(), 'HH:mm') : ''}
                     </span>
-                    <p className="text-[15px] text-[#dbdee1] leading-[1.375rem] break-words">
-                      {renderMessageContent(msg.content)}
-                    </p>
+                    <div className="flex-1 min-w-0">
+                      {editingMessageId === msg.id ? (
+                        <div className="mt-1">
+                          <textarea
+                            value={editInput}
+                            onChange={(e) => setEditInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault();
+                                handleEditMessage(msg.id);
+                              } else if (e.key === 'Escape') {
+                                setEditingMessageId(null);
+                              }
+                            }}
+                            className="w-full bg-[#383a40] text-[#dbdee1] rounded-md p-2 outline-none focus:ring-1 focus:ring-[#00a8fc] resize-none"
+                            autoFocus
+                          />
+                          <p className="text-[11px] text-[#dbdee1]/60 mt-1">
+                            escape to <span className="text-[#00a8fc] cursor-pointer hover:underline" onClick={() => setEditingMessageId(null)}>cancel</span> • enter to <span className="text-[#00a8fc] cursor-pointer hover:underline" onClick={() => handleEditMessage(msg.id)}>save</span>
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="text-[15px] text-[#dbdee1] leading-[1.375rem] break-words">
+                          {renderMessageContent(msg.content)}
+                          {msg.updatedAt && (
+                            <span className="text-[10px] text-[#949ba4] ml-1">(edited)</span>
+                          )}
+                        </p>
+                      )}
+
+                      {/* Reactions */}
+                      {msg.reactions && Object.keys(msg.reactions).length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {Object.entries(msg.reactions).map(([emoji, userIdsValue]) => {
+                            const userIds = userIdsValue as string[];
+                            const hasReacted = userIds.includes(user.uid);
+                            return (
+                              <button
+                                key={emoji}
+                                onClick={() => handleToggleReaction(msg.id, emoji)}
+                                className={cn(
+                                  "flex items-center gap-1.5 px-1.5 py-0.5 rounded-md border text-sm transition-colors",
+                                  hasReacted 
+                                    ? "bg-[#5865f2]/10 border-[#5865f2] text-[#00a8fc]" 
+                                    : "bg-[#2b2d31] border-transparent hover:border-[#4e5058] text-[#dbdee1]"
+                                )}
+                                title={userIds.length === 1 ? "1 person reacted" : `${userIds.length} people reacted`}
+                              >
+                                <span>{emoji}</span>
+                                <span className={cn("text-[11px] font-bold", hasReacted ? "text-[#00a8fc]" : "text-[#949ba4]")}>
+                                  {userIds.length}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                    
+                    {/* Message Actions */}
+                    <div className="absolute right-4 top-1 hidden group-hover:flex items-center gap-1 bg-[#2b2d31] border border-white/10 rounded overflow-hidden shadow-lg z-10">
+                      <button 
+                        onClick={() => setReactionMessageId(msg.id)}
+                        className="p-1.5 hover:bg-white/10 text-[#dbdee1] transition-colors"
+                        title="Add Reaction"
+                      >
+                        <Smile size={16} />
+                      </button>
+                      {(msg.userId === profile?.uid || profile?.email === 'njarvis9516@gmail.com') && (
+                        <>
+                          <button 
+                            onClick={() => startEditing(msg)}
+                            className="p-1.5 hover:bg-white/10 text-[#dbdee1] transition-colors"
+                            title="Edit Message"
+                          >
+                            <Pencil size={16} />
+                          </button>
+                          <button 
+                            onClick={() => handleDeleteMessage(msg.id)}
+                            className="p-1.5 hover:bg-red-500/10 text-red-500 transition-colors"
+                            title="Delete Message"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
                 );
               }
 
               return (
-                <div key={msg.id} className="flex gap-4 group -mx-4 px-4 py-1 hover:bg-black/10 transition-colors">
+                <div key={msg.id} className="flex gap-4 group -mx-4 px-4 py-1 hover:bg-black/10 transition-colors relative">
                   <div className="relative flex-shrink-0 mt-1">
-                    <img src={msg.userPhotoURL} alt={msg.userDisplayName} className="w-10 h-10 rounded-full cursor-pointer hover:shadow-lg transition-shadow" />
+                    <img src={msg.userPhotoURL || null} alt={msg.userDisplayName} className="w-10 h-10 rounded-full cursor-pointer hover:shadow-lg transition-shadow" />
                     <StatusBadge status={msgUser?.status || 'offline'} className="absolute -bottom-0.5 -right-0.5 border-[#313338] w-3.5 h-3.5" />
                   </div>
-                  <div className="flex-1 space-y-0.5">
+                  <div className="flex-1 min-w-0 space-y-0.5">
                     <div className="flex items-center gap-2">
                       <span className="font-bold text-white hover:underline cursor-pointer">{msg.userDisplayName}</span>
                       <span className="text-xs opacity-50 font-medium">
                         {msg.timestamp ? format(msg.timestamp.toDate(), 'MM/dd/yyyy HH:mm') : 'Sending...'}
                       </span>
                     </div>
-                    <p className="text-[15px] text-[#dbdee1] leading-[1.375rem] break-words">
-                      {renderMessageContent(msg.content)}
-                    </p>
+                    {editingMessageId === msg.id ? (
+                      <div className="mt-1">
+                        <textarea
+                          value={editInput}
+                          onChange={(e) => setEditInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault();
+                              handleEditMessage(msg.id);
+                            } else if (e.key === 'Escape') {
+                              setEditingMessageId(null);
+                            }
+                          }}
+                          className="w-full bg-[#383a40] text-[#dbdee1] rounded-md p-2 outline-none focus:ring-1 focus:ring-[#00a8fc] resize-none"
+                          autoFocus
+                        />
+                        <p className="text-[11px] text-[#dbdee1]/60 mt-1">
+                          escape to <span className="text-[#00a8fc] cursor-pointer hover:underline" onClick={() => setEditingMessageId(null)}>cancel</span> • enter to <span className="text-[#00a8fc] cursor-pointer hover:underline" onClick={() => handleEditMessage(msg.id)}>save</span>
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="text-[15px] text-[#dbdee1] leading-[1.375rem] break-words">
+                        {renderMessageContent(msg.content)}
+                        {msg.updatedAt && (
+                          <span className="text-[10px] text-[#949ba4] ml-1">(edited)</span>
+                        )}
+                      </p>
+                    )}
+
+                    {/* Reactions */}
+                    {msg.reactions && Object.keys(msg.reactions).length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {Object.entries(msg.reactions).map(([emoji, userIdsValue]) => {
+                          const userIds = userIdsValue as string[];
+                          const hasReacted = userIds.includes(user.uid);
+                          return (
+                            <button
+                              key={emoji}
+                              onClick={() => handleToggleReaction(msg.id, emoji)}
+                              className={cn(
+                                "flex items-center gap-1.5 px-1.5 py-0.5 rounded-md border text-sm transition-colors",
+                                hasReacted 
+                                  ? "bg-[#5865f2]/10 border-[#5865f2] text-[#00a8fc]" 
+                                  : "bg-[#2b2d31] border-transparent hover:border-[#4e5058] text-[#dbdee1]"
+                              )}
+                              title={userIds.length === 1 ? "1 person reacted" : `${userIds.length} people reacted`}
+                            >
+                              <span>{emoji}</span>
+                              <span className={cn("text-[11px] font-bold", hasReacted ? "text-[#00a8fc]" : "text-[#949ba4]")}>
+                                {userIds.length}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Message Actions */}
+                  <div className="absolute right-4 top-2 hidden group-hover:flex items-center gap-1 bg-[#2b2d31] border border-white/10 rounded overflow-hidden shadow-lg z-10">
+                    <button 
+                      onClick={() => setReactionMessageId(msg.id)}
+                      className="p-1.5 hover:bg-white/10 text-[#dbdee1] transition-colors"
+                      title="Add Reaction"
+                    >
+                      <Smile size={16} />
+                    </button>
+                    {(msg.userId === profile?.uid || profile?.email === 'njarvis9516@gmail.com') && (
+                      <>
+                        <button 
+                          onClick={() => startEditing(msg)}
+                          className="p-1.5 hover:bg-white/10 text-[#dbdee1] transition-colors"
+                          title="Edit Message"
+                        >
+                          <Pencil size={16} />
+                        </button>
+                        <button 
+                          onClick={() => handleDeleteMessage(msg.id)}
+                          className="p-1.5 hover:bg-red-500/10 text-red-500 transition-colors"
+                          title="Delete Message"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               );
-            })
-          )}
-        </div>
+            })}
+          </>
+        )}
+      </div>
 
         {/* Chat Input */}
         <div className="px-4 pb-6 relative">
@@ -844,7 +1219,7 @@ export default function App() {
                     onClick={() => insertMention(u)}
                     className="flex items-center gap-2 px-3 py-2 hover:bg-white/[0.04] cursor-pointer transition-colors"
                   >
-                    <img src={u.photoURL} alt="" className="w-5 h-5 rounded-full" />
+                    <img src={u.photoURL || null} alt="" className="w-5 h-5 rounded-full" />
                     <span className="text-sm font-medium">{u.displayName}</span>
                   </div>
                 ))}
@@ -858,13 +1233,49 @@ export default function App() {
             <div className="p-1 bg-[#404249] rounded-full cursor-pointer hover:bg-[#4d4f58] transition-colors">
               <Plus size={20} />
             </div>
-            <input 
+            <textarea 
+              ref={inputRef}
               value={messageInput}
               onChange={handleInputChange}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSendMessage();
+                  // Reset height after sending
+                  const target = e.target as HTMLTextAreaElement;
+                  target.style.height = 'auto';
+                }
+              }}
               placeholder={`Message #${activeChannel?.name || 'channel'}`}
-              className="flex-1 bg-transparent border-none outline-none text-[#dbdee1] placeholder:text-[#949ba4] text-[15px]"
+              className="flex-1 bg-transparent border-none outline-none text-[#dbdee1] placeholder:text-[#949ba4] text-[15px] resize-none py-1 max-h-[200px] overflow-y-auto"
+              rows={1}
             />
             <div className="flex items-center gap-3 opacity-60">
+              <div className="relative" ref={emojiPickerRef}>
+                <Smile 
+                  size={22} 
+                  className={cn("cursor-pointer hover:text-white transition-colors", isEmojiPickerOpen ? "text-white opacity-100" : "")} 
+                  onClick={() => setIsEmojiPickerOpen(!isEmojiPickerOpen)}
+                />
+                <AnimatePresence>
+                  {isEmojiPickerOpen && (
+                    <motion.div 
+                      initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                      animate={{ opacity: 1, scale: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                      className="absolute bottom-full right-0 mb-4 z-50 shadow-2xl"
+                    >
+                      <EmojiPicker 
+                        theme={Theme.DARK}
+                        onEmojiClick={onEmojiClick}
+                        autoFocusSearch={false}
+                        width={350}
+                        height={400}
+                      />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
               <Send 
                 size={22} 
                 className={cn("cursor-pointer hover:text-white transition-colors", messageInput.trim() ? "text-[#5865f2] opacity-100" : "")} 
@@ -878,7 +1289,14 @@ export default function App() {
   </div>
 
       {/* 4. Member Sidebar */}
-      <div className="w-60 bg-[#2b2d31] border-l border-[#1e1f22] flex flex-col flex-shrink-0 hidden xl:flex">
+      <AnimatePresence>
+        {isUserListOpen && (
+          <motion.div 
+            initial={{ width: 0, opacity: 0 }}
+            animate={{ width: 240, opacity: 1 }}
+            exit={{ width: 0, opacity: 0 }}
+            className="w-60 bg-[#2b2d31] border-l border-[#1e1f22] flex flex-col flex-shrink-0"
+          >
          <div className="h-12 px-4 flex items-center border-b border-[#1e1f22] shadow-sm">
            <span className="text-xs font-bold uppercase opacity-60 tracking-wider">Members — {allUsers.length}</span>
          </div>
@@ -889,7 +1307,7 @@ export default function App() {
                {allUsers.map((u) => (
                  <div key={u.uid} className="flex items-center gap-3 px-2 py-1.5 rounded-md hover:bg-white/[0.04] cursor-pointer group">
                    <div className="relative flex-shrink-0">
-                     <img src={u.photoURL} alt={u.displayName} className="w-8 h-8 rounded-full" />
+                     <img src={u.photoURL || null} alt={u.displayName} className="w-8 h-8 rounded-full" />
                      <StatusBadge status={u.status || 'offline'} className="absolute -bottom-0.5 -right-0.5 border-[#2b2d31]" />
                    </div>
                    <div className="flex-1 truncate">
@@ -902,11 +1320,41 @@ export default function App() {
              </div>
            </div>
          </div>
-      </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  </div>
 
-      {/* Create Server Modal */}
-      <AnimatePresence>
-        {isCreatingServer && (
+  {/* Message Reaction Picker */}
+  <AnimatePresence>
+    {reactionMessageId && (
+      <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+        <div 
+          className="absolute inset-0 bg-black/40" 
+          onClick={() => setReactionMessageId(null)}
+        />
+        <motion.div 
+          initial={{ scale: 0.9, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          exit={{ scale: 0.9, opacity: 0 }}
+          className="relative z-10 shadow-2xl"
+        >
+          <EmojiPicker 
+            theme={Theme.DARK}
+            onEmojiClick={(data) => onReactionEmojiClick(data, reactionMessageId)}
+            autoFocusSearch={true}
+            width={350}
+            height={400}
+          />
+        </motion.div>
+      </div>
+    )}
+  </AnimatePresence>
+
+  {/* Create Server Modal */}
+  <AnimatePresence>
+    {isCreatingServer && (
           <div className="fixed inset-0 bg-black/85 z-[100] flex items-center justify-center p-4">
             <motion.div 
               initial={{ scale: 0.9, opacity: 0 }}
@@ -962,10 +1410,11 @@ export default function App() {
                 </button>
                 <button 
                   onClick={handleCreateServer}
-                  disabled={!newServerName.trim()}
-                  className="bg-[#5865f2] hover:bg-[#4752c4] disabled:opacity-50 disabled:hover:bg-[#5865f2] text-white px-8 py-2.5 rounded-md font-medium transition-colors"
+                  disabled={!newServerName.trim() || isCreatingServerLoading}
+                  className="bg-[#5865f2] hover:bg-[#4752c4] disabled:opacity-50 disabled:hover:bg-[#5865f2] text-white px-8 py-2.5 rounded-md font-medium transition-colors flex items-center gap-2"
                 >
-                  Create
+                  {isCreatingServerLoading && <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />}
+                  {isCreatingServerLoading ? 'Creating...' : 'Create'}
                 </button>
               </div>
             </motion.div>
@@ -1103,18 +1552,41 @@ export default function App() {
                 </div>
 
                 <div className="mt-8 pt-6 border-t border-white/5">
-                  <button 
-                    onClick={handleDeleteServer}
-                    className="w-full flex items-center justify-between p-3 rounded-md hover:bg-red-500/10 text-red-400 font-medium transition-colors border border-red-400/20"
-                  >
-                    <span>Delete Server</span>
-                    <LogOut size={18} />
-                  </button>
+                  {!isDeletingServer ? (
+                    <button 
+                      onClick={() => setIsDeletingServer(true)}
+                      className="w-full flex items-center justify-between p-3 rounded-md hover:bg-red-500/10 text-red-400 font-medium transition-colors border border-red-400/20"
+                    >
+                      <span>Delete Server</span>
+                      <LogOut size={18} />
+                    </button>
+                  ) : (
+                    <div className="bg-red-500/10 border border-red-500/50 rounded-lg p-4 space-y-3">
+                      <p className="text-sm font-medium text-red-400">Are you absolutely sure? This cannot be undone.</p>
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={handleDeleteServer}
+                          className="flex-1 bg-red-500 hover:bg-red-600 text-white py-2 rounded-md font-bold transition-colors"
+                        >
+                          Yes, Delete Server
+                        </button>
+                        <button 
+                          onClick={() => setIsDeletingServer(false)}
+                          className="flex-1 bg-white/10 hover:bg-white/20 text-white py-2 rounded-md font-medium transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="bg-[#2b2d31] p-4 flex items-center justify-end gap-4">
                 <button 
-                  onClick={() => setIsServerSettingsOpen(false)}
+                  onClick={() => {
+                    setIsServerSettingsOpen(false);
+                    setIsDeletingServer(false);
+                  }}
                   className="px-4 py-2.5 text-sm font-medium hover:underline"
                 >
                   Cancel
@@ -1125,6 +1597,122 @@ export default function App() {
                   className="bg-[#5865f2] hover:bg-[#4752c4] disabled:opacity-50 text-white px-8 py-2.5 rounded-md font-medium transition-colors"
                 >
                   Save Changes
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* User Settings Modal */}
+      <AnimatePresence>
+        {isUserSettingsOpen && profile && (
+          <div className="fixed inset-0 bg-black/85 z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-[#313338] w-full max-w-lg rounded-lg overflow-hidden flex flex-col shadow-2xl border border-white/5"
+            >
+              <div className="p-8">
+                <div className="flex items-center justify-between mb-6">
+                  <div>
+                    <h2 className="text-2xl font-bold text-white mb-2">User Profile</h2>
+                    <p className="text-[#b5bac1] text-sm">Customize how you appear to others.</p>
+                  </div>
+                  <button 
+                    onClick={() => setIsUserSettingsOpen(false)}
+                    className="p-2 hover:bg-white/10 rounded-full transition-colors"
+                  >
+                    <Plus className="rotate-45" size={24} />
+                  </button>
+                </div>
+                
+                <div className="flex gap-8">
+                  <div className="flex flex-col items-center flex-shrink-0">
+                    <div className="relative group">
+                      <div className="w-24 h-24 bg-[#1e1f22] rounded-full overflow-hidden border-4 border-[#2b2d31] shadow-xl mb-4 group-hover:opacity-80 transition-opacity">
+                        <img src={editPhotoURL || null} alt="Avatar" className="w-full h-full object-cover" />
+                      </div>
+                      <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity">
+                        <span className="bg-black/60 px-2 py-1 rounded text-[10px] font-bold uppercase text-white shadow-lg">Change</span>
+                      </div>
+                    </div>
+                    <div className="w-full h-2 rounded-full overflow-hidden bg-[#23a559] relative mb-2">
+                       <StatusBadge status={profile.status} className="static border-0 w-full h-full" />
+                    </div>
+                  </div>
+
+                  <div className="flex-1 space-y-5">
+                    <div className="flex flex-col gap-2">
+                      <label className="text-xs font-bold uppercase opacity-60">Display Name</label>
+                      <input 
+                        value={editDisplayName}
+                        onChange={(e) => setEditDisplayName(e.target.value)}
+                        placeholder="What should we call you?"
+                        className="bg-[#1e1f22] p-3 rounded-md outline-none text-white focus:ring-2 ring-[#5865f2] transition-shadow w-full"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-2 relative">
+                      <label className="text-xs font-bold uppercase opacity-60">Username (Unique)</label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 opacity-40">@</span>
+                        <input 
+                          value={editUsername}
+                          onChange={(e) => {
+                             setEditUsername(e.target.value.toLowerCase().replace(/\s+/g, ''));
+                             setUsernameError('');
+                          }}
+                          placeholder="unique_handle"
+                          className={cn(
+                            "bg-[#1e1f22] p-3 pl-8 rounded-md outline-none text-white focus:ring-2 transition-shadow w-full",
+                            usernameError ? "ring-2 ring-red-500" : "ring-[#5865f2]"
+                          )}
+                        />
+                      </div>
+                      {usernameError && <p className="text-[10px] text-red-400 font-medium absolute -bottom-4">{usernameError}</p>}
+                    </div>
+                    <div className="flex flex-col gap-2 pt-2">
+                      <label className="text-xs font-bold uppercase opacity-60">Avatar URL</label>
+                      <input 
+                        value={editPhotoURL}
+                        onChange={(e) => setEditPhotoURL(e.target.value)}
+                        placeholder="https://example.com/avatar.png"
+                        className="bg-[#1e1f22] p-3 rounded-md outline-none text-white focus:ring-2 ring-[#5865f2] transition-shadow w-full"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <label className="text-xs font-bold uppercase opacity-60">Custom Status Message</label>
+                      <textarea 
+                        value={editCustomStatus}
+                        onChange={(e) => setEditCustomStatus(e.target.value.slice(0, 100))}
+                        placeholder="What's on your mind?"
+                        rows={2}
+                        className="bg-[#1e1f22] p-3 rounded-md outline-none text-white focus:ring-2 ring-[#5865f2] transition-shadow w-full resize-none"
+                      />
+                      <p className="text-[10px] text-right opacity-40">{editCustomStatus.length}/100</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-[#2b2d31] p-4 flex items-center justify-between gap-4">
+                <button 
+                  onClick={() => setIsUserSettingsOpen(false)}
+                  className="px-4 py-2.5 text-sm font-medium hover:underline text-[#b5bac1]"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={handleUpdateProfile}
+                  disabled={isSavingProfile || !editDisplayName.trim() || !editUsername.trim()}
+                  className="bg-[#23a559] hover:bg-[#1a8344] disabled:opacity-50 text-white px-8 py-2.5 rounded-md font-medium transition-all flex items-center gap-2"
+                >
+                  {isSavingProfile ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Saving...
+                    </>
+                  ) : 'Update Profile'}
                 </button>
               </div>
             </motion.div>

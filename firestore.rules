@@ -23,20 +23,31 @@ service cloud.firestore {
       return isSignedIn() && exists(/databases/$(database)/documents/servers/$(serverId)/members/$(request.auth.uid));
     }
 
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.email == 'njarvis9516@gmail.com' && request.auth.token.email_verified == true;
+    }
+
     function incoming() {
       return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
     }
 
     // Validation helpers
     function isValidUser(data) {
       return data.uid == request.auth.uid &&
              data.displayName is string && data.displayName.size() <= 100 &&
+             (!('username' in data) || (data.username is string && data.username.size() <= 32 && data.username.matches('^[a-z0-9_]+$'))) &&
+             (!('customStatus' in data) || (data.customStatus is string && data.customStatus.size() <= 100)) &&
              data.status in ['online', 'idle', 'dnd', 'offline'];
     }
 
     function isValidServer(data) {
-      return data.keys().hasAll(['name', 'ownerId', 'createdAt']) &&
+      return data.keys().hasAll(['name', 'ownerId', 'createdAt', 'memberIds']) &&
              data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             data.memberIds is list && data.memberIds.size() > 0 &&
              (!('iconURL' in data) || (data.iconURL is string && data.iconURL.size() <= 2048));
     }
 
@@ -61,13 +72,17 @@ service cloud.firestore {
 
     // Servers
     match /servers/{serverId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && isValidServer(incoming()) && incoming().ownerId == request.auth.uid;
+      allow read: if isSignedIn() && (
+        isAdmin() ||
+        (request.auth.uid in resource.data.get('memberIds', [])) || 
+        (resource.data.get('ownerId', '') == request.auth.uid)
+      );
+      allow create: if isSignedIn() && isValidServer(incoming()) && incoming().ownerId == request.auth.uid && (request.auth.uid in incoming().memberIds);
       allow update: if isSignedIn() && 
-                    resource.data.ownerId == request.auth.uid && 
+                    (resource.data.ownerId == request.auth.uid || isAdmin()) && 
                     isValidServer(incoming()) &&
                     incoming().ownerId == resource.data.ownerId;
-      allow delete: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      allow delete: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
 
       // Server Members
       match /members/{memberId} {
@@ -90,7 +105,7 @@ service cloud.firestore {
       allow read: if isSignedIn(); 
       allow list: if isSignedIn();
       allow create: if isSignedIn() && isValidMessage(incoming());
-      allow update, delete: if isOwner(resource.data.userId);
+      allow update, delete: if isOwner(resource.data.userId) || isAdmin();
     }
 
     // Voice States

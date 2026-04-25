@@ -11,7 +11,11 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
-  writeBatch
+  writeBatch,
+  or,
+  limit,
+  startAfter,
+  getDoc
 } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
 import { Message, Server, Channel, UserProfile, ServerMember, VoiceState, Notification } from '../types';
@@ -71,12 +75,13 @@ export const chatService = {
       const serverData: any = {
         name,
         ownerId,
+        memberIds: [ownerId],
         createdAt: new Date().toISOString()
       };
       if (iconURL) serverData.iconURL = iconURL;
 
       const serverRef = await addDoc(collection(db, path), serverData);
-      // Add owner as member
+      // Add owner as member in subcollection too (for detailed membership info)
       await setDoc(doc(db, `servers/${serverRef.id}/members`, ownerId), {
         userId: ownerId,
         role: 'owner',
@@ -97,6 +102,33 @@ export const chatService = {
         createdAt: new Date().toISOString()
       });
       return serverRef.id;
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, path);
+    }
+  },
+
+  async joinServer(serverId: string, userId: string) {
+    const path = `servers/${serverId}/members/${userId}`;
+    try {
+      // 1. Add to members subcollection
+      await setDoc(doc(db, `servers/${serverId}/members`, userId), {
+        userId,
+        role: 'member',
+        joinedAt: new Date().toISOString()
+      });
+
+      // 2. Update memberIds array for easier querying
+      const serverRef = doc(db, 'servers', serverId);
+      const serverSnap = await getDocs(query(collection(db, 'servers'), where('__name__', '==', serverId)));
+      if (!serverSnap.empty) {
+        const data = serverSnap.docs[0].data();
+        const memberIds = data.memberIds || [];
+        if (!memberIds.includes(userId)) {
+          await updateDoc(serverRef, {
+            memberIds: [...memberIds, userId]
+          });
+        }
+      }
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, path);
     }
@@ -125,7 +157,36 @@ export const chatService = {
     }
   },
 
-  listenToServers(callback: (servers: Server[]) => void) {
+  listenToServers(userId: string | undefined, callback: (servers: Server[]) => void) {
+    const path = 'servers';
+    let q;
+    
+    // Admin override: naturally show all servers for the owner/admin to allow cleanup
+    const isAdmin = auth.currentUser?.email === 'njarvis9516@gmail.com' && auth.currentUser?.emailVerified;
+
+    if (isAdmin) {
+      q = collection(db, path);
+    } else if (userId) {
+      // Listen to servers where user is either the owner OR a listed member
+      q = query(
+        collection(db, path), 
+        or(
+          where('ownerId', '==', userId),
+          where('memberIds', 'array-contains', userId)
+        )
+      );
+    } else {
+      // Fallback to all (only for unauthenticated state or discovery)
+      q = collection(db, path);
+    }
+
+    return onSnapshot(q, (snapshot) => {
+      const servers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Server));
+      callback(servers);
+    }, (e) => handleFirestoreError(e, OperationType.LIST, path));
+  },
+
+  listenToAllPublicServers(callback: (servers: Server[]) => void) {
     const path = 'servers';
     return onSnapshot(collection(db, path), (snapshot) => {
       const servers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Server));
@@ -175,20 +236,113 @@ export const chatService = {
     }
   },
 
-  listenToMessages(channelId: string, callback: (messages: Message[]) => void) {
+  async deleteMessage(channelId: string, messageId: string) {
+    const path = `channels/${channelId}/messages/${messageId}`;
+    try {
+      await deleteDoc(doc(db, `channels/${channelId}/messages`, messageId));
+    } catch (e) {
+      handleFirestoreError(e, OperationType.DELETE, path);
+    }
+  },
+
+  async updateMessage(channelId: string, messageId: string, content: string) {
+    const path = `channels/${channelId}/messages/${messageId}`;
+    try {
+      await updateDoc(doc(db, `channels/${channelId}/messages`, messageId), {
+        content,
+        updatedAt: serverTimestamp()
+      });
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, path);
+    }
+  },
+
+  async toggleReaction(channelId: string, messageId: string, emoji: string, userId: string) {
+    const path = `channels/${channelId}/messages/${messageId}`;
+    try {
+      const messageRef = doc(db, `channels/${channelId}/messages`, messageId);
+      const messageSnap = await getDoc(messageRef);
+      
+      if (!messageSnap.exists()) return;
+      
+      const data = messageSnap.data();
+      const reactions: Record<string, string[]> = data.reactions || {};
+      const emojiReactions = reactions[emoji] || [];
+      
+      let updatedEmojiReactions;
+      if (emojiReactions.includes(userId)) {
+        updatedEmojiReactions = emojiReactions.filter(id => id !== userId);
+      } else {
+        updatedEmojiReactions = [...emojiReactions, userId];
+      }
+      
+      const updatedReactions = { ...reactions };
+      if (updatedEmojiReactions.length === 0) {
+        delete updatedReactions[emoji];
+      } else {
+        updatedReactions[emoji] = updatedEmojiReactions;
+      }
+      
+      await updateDoc(messageRef, { reactions: updatedReactions });
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, path);
+    }
+  },
+
+  listenToMessages(channelId: string, limitCount: number | undefined, callback: (messages: Message[]) => void) {
     const path = `channels/${channelId}/messages`;
-    const q = query(collection(db, path), orderBy('timestamp', 'asc'));
+    let q = query(collection(db, path), orderBy('timestamp', 'desc'));
+    if (limitCount) {
+      q = query(q, limit(limitCount));
+    }
     return onSnapshot(q, (snapshot) => {
-      const messages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Message));
+      // Since we ordered by desc to get the latest ones, and limited, we need to reverse them for the UI
+      const messages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Message)).reverse();
       callback(messages);
     }, (e) => handleFirestoreError(e, OperationType.LIST, path));
   },
 
-  // Users
-  async updateUserProfile(profile: UserProfile) {
-    const path = `users/${profile.uid}`;
+  async fetchMessagesBefore(channelId: string, lastTimestamp: any, limitCount: number) {
+    const path = `channels/${channelId}/messages`;
     try {
-      await setDoc(doc(db, 'users', profile.uid), profile, { merge: true });
+      const q = query(
+        collection(db, path),
+        orderBy('timestamp', 'desc'),
+        startAfter(lastTimestamp),
+        limit(limitCount)
+      );
+      const snapshot = await getDocs(q);
+      return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Message)).reverse();
+    } catch (e) {
+      handleFirestoreError(e, OperationType.LIST, path);
+      return [];
+    }
+  },
+
+  // Users
+  async isUsernameUnique(username: string, excludeUid?: string) {
+    const path = 'users';
+    try {
+      const q = query(collection(db, path), where('username', '==', username.toLowerCase()));
+      const snapshot = await getDocs(q);
+      if (snapshot.empty) return true;
+      if (excludeUid && snapshot.docs.length === 1 && snapshot.docs[0].id === excludeUid) return true;
+      return false;
+    } catch (e) {
+      handleFirestoreError(e, OperationType.GET, path);
+      return false;
+    }
+  },
+
+  async updateUserProfile(uid: string, data: Partial<UserProfile>) {
+    const path = `users/${uid}`;
+    try {
+      // If updating username, ensure it's lowercase for indexing
+      const updateData = { ...data };
+      if (updateData.username) {
+        updateData.username = updateData.username.toLowerCase();
+      }
+      await updateDoc(doc(db, 'users', uid), updateData);
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, path);
     }

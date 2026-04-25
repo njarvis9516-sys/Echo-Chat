@@ -21,9 +21,11 @@ export function useAuth() {
           setProfile(userSnap.data() as UserProfile);
         } else {
           // Create initial profile
+          const baseName = firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'user';
           const newProfile: UserProfile = {
             uid: firebaseUser.uid,
-            displayName: firebaseUser.displayName || 'Anonymous',
+            username: `${baseName.toLowerCase().replace(/\s+/g, '')}${Math.floor(Math.random() * 1000)}`,
+            displayName: firebaseUser.displayName || baseName,
             email: firebaseUser.email || '',
             photoURL: firebaseUser.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${firebaseUser.uid}`,
             status: 'online',
