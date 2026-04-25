@@ -343,6 +343,82 @@ export default function App() {
     }
   };
 
+  // Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger shortcuts if user is typing in certain elements unless it's Escape/Alt/Ctrl combo
+      const isTyping = ['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName);
+
+      // ESC: Close UI elements
+      if (e.key === 'Escape') {
+        setMentionSuggestions([]);
+        setMentionTriggerIndex(null);
+        setIsNotificationsOpen(false);
+        setIsCreatingServer(false);
+        setIsCreatingChannel(false);
+        setIsServerSettingsOpen(false);
+        return;
+      }
+
+      // Voice Controls (Ctrl + Shift + ...)
+      if (e.ctrlKey && e.shiftKey) {
+        if (e.key.toLowerCase() === 'm') {
+          e.preventDefault();
+          toggleMute();
+        }
+        if (e.key.toLowerCase() === 'd') {
+          e.preventDefault();
+          toggleDeaf();
+        }
+      }
+
+      // Navigation (Alt + ...)
+      if (e.altKey) {
+        // Channel Navigation
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+          e.preventDefault();
+          if (channels.length > 0) {
+            const currentIndex = channels.findIndex(c => c.id === selectedChannelId);
+            let nextIndex = currentIndex;
+            if (e.key === 'ArrowUp') {
+              nextIndex = currentIndex <= 0 ? channels.length - 1 : currentIndex - 1;
+            } else {
+              nextIndex = currentIndex >= channels.length - 1 ? 0 : currentIndex + 1;
+            }
+            setSelectedChannelId(channels[nextIndex].id);
+          }
+        }
+        // Server Navigation
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+          e.preventDefault();
+          if (servers.length > 0) {
+            const currentIndex = servers.findIndex(s => s.id === selectedServerId);
+            let nextIndex = currentIndex;
+            if (e.key === 'ArrowLeft') {
+              nextIndex = currentIndex <= 0 ? servers.length - 1 : currentIndex - 1;
+            } else {
+              nextIndex = currentIndex >= servers.length - 1 ? 0 : currentIndex + 1;
+            }
+            setSelectedServerId(servers[nextIndex].id);
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    user, 
+    channels, 
+    selectedChannelId, 
+    servers, 
+    selectedServerId, 
+    isMuted, 
+    isDeafened,
+    toggleMute, // These are dependencies now
+    toggleDeaf
+  ]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-screen bg-[#313338] text-white">
